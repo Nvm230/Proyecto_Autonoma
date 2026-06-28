@@ -1,0 +1,8 @@
+ar_ws/build/
+ar_ws/install/
+ar_ws/log/
+
+__pycache__/
+*.pyc
+.vscode/
+.idea/
