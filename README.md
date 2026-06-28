@@ -1,1 +1,1 @@
-cada uno en su rama y de ahi con fe al main
+Entrenamiento para comandos por voz (relacionado con la actividad 2) [4]
