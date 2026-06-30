@@ -20,6 +20,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'VoiceInteractionNode = nodes.VoiceInteractionNode:main',
+            'CommandInterpreter = nodes.CommandInterpreter:main'
         ],
     },
 )
