@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = 'nodes'
+package_name = 'autlab5'
 
 setup(
     name=package_name,
@@ -13,11 +13,15 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='flaviasofia',
-    maintainer_email='flaviasofia@todo.todo',
+    maintainer='alex',
+    maintainer_email='alex@todo.todo',
     description='TODO: Package description',
     license='TODO: License declaration',
-    tests_require=['pytest'],
+    extras_require={
+        'test': [
+            'pytest',
+        ],
+    },
     entry_points={
         'console_scripts': [
         ],
