@@ -4,7 +4,7 @@ Este proyecto implementa un robot TurtleBot3 autónomo en un entorno simulado de
 
 ## Requisitos Previos
 
-- **Sistema Operativo:** Linux (ej. Arch Linux) con entorno de contenedores (Distrobox recomendado).
+- **Sistema Operativo:** Ubuntu 22.04 LTS (Jammy Jellyfish).
 - **ROS 2:** Humble Hawksbill.
 - **Python 3:** Con las librerías necesarias (Ultralytics YOLO, SpeechRecognition, PyAudio, OpenCV, etc).
 
@@ -12,13 +12,7 @@ Este proyecto implementa un robot TurtleBot3 autónomo en un entorno simulado de
 
 ## 1. Compilación del Espacio de Trabajo
 
-Abre una terminal y asegúrate de estar dentro del contenedor de ROS 2 Humble (si usas distrobox):
-
-```bash
-distrobox-enter -n ros2_humble
-```
-
-Ve a la raíz de tu proyecto (donde se encuentra la carpeta `src`) y compila todo el espacio de trabajo:
+Abre una terminal y ve a la raíz de tu proyecto (donde se encuentra la carpeta `src`):
 
 ```bash
 cd ~/Documents/Proyecto_Autonoma
@@ -26,7 +20,7 @@ source /opt/ros/humble/setup.bash
 colcon build
 ```
 
-Una vez terminada la compilación, **siempre** debes hacer *source* al archivo de instalación para que ROS 2 reconozca tus paquetes:
+Una vez terminada la compilación, **siempre** debes hacer *source* al archivo de instalación para que ROS 2 reconozca tus paquetes. En la misma terminal ejecuta:
 
 ```bash
 source install/setup.bash
@@ -36,10 +30,11 @@ source install/setup.bash
 
 ## 2. Ejecutar la Simulación y Nav2
 
-Para iniciar el entorno virtual (Gazebo) junto con el mapa de la casa, el robot y el sistema de navegación Nav2 (AMCL), abre una **Terminal 1** y ejecuta:
+Para iniciar el entorno virtual (Gazebo) junto con el mapa de la casa, el robot y el sistema de navegación Nav2 (AMCL), asegúrate de haber compilado y haz source en tu **Terminal 1**:
 
 ```bash
-# Recuerda estar dentro de distrobox y haber ejecutado "source install/setup.bash"
+source /opt/ros/humble/setup.bash
+source install/setup.bash
 ros2 launch project_bringup simulation_launch.py
 ```
 
@@ -49,12 +44,9 @@ ros2 launch project_bringup simulation_launch.py
 
 ## 3. Ejecutar la Lógica de Comportamiento (Cerebro, Visión y Voz)
 
-Una vez que la simulación esté cargada por completo, abre una **Terminal 2**, entra al entorno de ROS 2 y ejecuta:
+Una vez que la simulación esté cargada por completo y viendo el mapa en RViz, abre una **Terminal 2**, prepara tu entorno de ROS 2 y ejecuta:
 
 ```bash
-# Entrar a distrobox
-distrobox-enter -n ros2_humble
-
 # Preparar el entorno
 cd ~/Documents/Proyecto_Autonoma
 source /opt/ros/humble/setup.bash
