@@ -107,7 +107,12 @@ class BrainNode(Node):
             return
             
         detected = msg.data.split(',')
-        if self.target_object in detected:
+        # Map target to possible YOLOv8 detections (simulation objects might look different to AI)
+        acceptable_detections = [self.target_object]
+        if self.target_object == 'bottle':
+            acceptable_detections.extend(['cup', 'vase', 'wine glass'])
+            
+        if any(item in detected for item in acceptable_detections):
             self.get_logger().info(f'*** TARGET FOUND: {self.target_object.upper()} ***')
             self.searching = False
             self.fallback_spinning = False

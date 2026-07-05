@@ -6,11 +6,17 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
+    device_index = LaunchConfiguration('device_index')
     
     declare_use_sim_time_cmd = DeclareLaunchArgument(
         'use_sim_time',
         default_value='false',
         description='Use simulation (Gazebo) clock if true')
+
+    declare_device_index_cmd = DeclareLaunchArgument(
+        'device_index',
+        default_value='-1',
+        description='PyAudio device index for microphone (-1 for default)')
     # Object Detector Node
     detector_node = Node(
         package='object_detection_ros',
@@ -26,7 +32,10 @@ def generate_launch_description():
         executable='VoiceInteractionNode',
         name='voice_interaction_node',
         output='screen',
-        parameters=[{'use_sim_time': use_sim_time}]
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'device_index': device_index
+        }]
     )
     
     # Brain Node (Behavior and Navigation logic)
@@ -40,6 +49,7 @@ def generate_launch_description():
 
     ld = LaunchDescription()
     ld.add_action(declare_use_sim_time_cmd)
+    ld.add_action(declare_device_index_cmd)
     ld.add_action(detector_node)
     ld.add_action(voice_node)
     ld.add_action(brain_node)

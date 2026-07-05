@@ -31,9 +31,10 @@ class DetectorNode(Node):
         self.get_logger().info("Loading pre-trained YOLOv8 model...")
         self.model = YOLO('yolov8n.pt')
         
-        # Define the 2 objects you want to detect (must be from the 80 COCO classes)
-        # Examples: 'person', 'bottle', 'cell phone', 'cup', 'chair', 'book'
-        self.target_classes = ['bottle', 'cell phone']
+        # Define the objects you want to detect
+        # We include 'cup', 'vase', 'wine glass' because Gazebo's "beer" model 
+        # is sometimes misclassified by YOLOv8 due to low graphics.
+        self.target_classes = ['bottle', 'cell phone', 'cup', 'vase', 'wine glass']
         
         # Get the class IDs for the target classes
         self.target_class_ids = []
