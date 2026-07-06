@@ -11,11 +11,16 @@
 
 ### Configurar las variables de entorno
 
-Editar el archivo `~/.bashrc` y añadir al final:
+Editar el archivo con:
+```bash
+nano ~/.bashrc
+```
 
+Añadir al final:
 ```bash
 export ROS_DOMAIN_ID=<ID_DEL_ROBOT>
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+export ROS_LOCALHOST_ONLY=0
 ```
 
 > Reemplazar `<ID_DEL_ROBOT>` por el número de tres cifras indicado en la etiqueta del robot.
