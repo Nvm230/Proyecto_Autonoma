@@ -1,0 +1,69 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[spanish]{babel}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{geometry}
+\geometry{a4paper, margin=2.5cm}
+
+\title{\textbf{Reporte de Implementación: Robot Autónomo de Búsqueda controlable por Voz}}
+\author{Proyecto Autónoma}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\section{Introducción}
+El presente documento detalla la arquitectura, herramientas y librerías utilizadas en la implementación de un robot autónomo basado en el TurtleBot3. El objetivo principal del proyecto es permitir que el robot navegue por un entorno conocido, reciba comandos de voz en lenguaje natural, y busque objetos específicos utilizando visión computacional impulsada por Inteligencia Artificial.
+
+\section{Arquitectura del Sistema}
+El sistema está construido bajo el ecosistema de \textbf{ROS 2 (Humble Hawksbill)} en Ubuntu 22.04. La arquitectura se basa en una estructura de nodos independientes que se comunican mediante el modelo publicador/suscriptor y acciones. 
+
+El sistema consta de tres nodos principales desarrollados a medida:
+\begin{itemize}
+    \item \textbf{VoiceInteractionNode (Nodo de Voz):} Se encarga de escuchar activamente el entorno a través del micrófono. Al detectar habla, procesa el audio y lo convierte a texto. El texto resultante se publica en el tópico \texttt{/voice\_commands}.
+    \item \textbf{DetectorNode (Nodo de Visión):} Se suscribe al tópico de la cámara del robot (\texttt{/camera/image\_raw}). Procesa cada fotograma utilizando un modelo de redes neuronales convolucionales (YOLOv8) para detectar objetos en tiempo real. Publica los objetos encontrados en el tópico \texttt{/detected\_objects} y una imagen anotada en \texttt{/camera/image\_annotated}.
+    \item \textbf{BrainNode (Nodo Cerebro/Controlador):} Es la máquina de estados central. Recibe los comandos de voz y las detecciones visuales. Si recibe una orden de búsqueda, envía metas de navegación (Action \texttt{NavigateToPose}) al stack de Nav2 para patrullar distintos "waypoints" (habitaciones). Al llegar a un waypoint, el robot gira sobre su propio eje para escanear el entorno. Si el nodo de visión confirma la presencia del objeto, el BrainNode detiene el robot inmediatamente.
+\end{itemize}
+
+\section{Herramientas y Librerías Utilizadas}
+
+\subsection{Sistema Operativo y Middleware}
+\begin{itemize}
+    \item \textbf{Ubuntu 22.04 LTS (Jammy Jellyfish)}
+    \item \textbf{ROS 2 Humble Hawksbill}
+\end{itemize}
+
+\subsection{Hardware y Simulación}
+\begin{itemize}
+    \item \textbf{TurtleBot3:} Plataforma robótica utilizada (modelo Waffle Pi / Burger).
+    \item \textbf{Gazebo 11:} Utilizado para la simulación de físicas, colisiones y sensores (LiDAR, Cámara) durante el desarrollo previo a la implementación física.
+\end{itemize}
+
+\subsection{Navegación (Navigation 2)}
+El stack de \textbf{Nav2} se utiliza para la autonomía del robot.
+\begin{itemize}
+    \item \textbf{AMCL (Adaptive Monte Carlo Localization):} Algoritmo probabilístico utilizado para localizar al robot dentro de un mapa pre-construido.
+    \item \textbf{DWB Local Planner:} Planificador local que evalúa trayectorias para esquivar obstáculos dinámicos.
+    \item \textbf{Costmaps:} Mapas de costo global y local ajustados con un \textit{inflation\_radius} calibrado (0.35m) para permitir la navegación en pasillos estrechos.
+\end{itemize}
+
+\subsection{Procesamiento de Voz y Audio}
+\begin{itemize}
+    \item \textbf{SpeechRecognition (Python):} Librería principal para interactuar con motores de reconocimiento de voz.
+    \item \textbf{Google Web Speech API:} Motor utilizado para la transcripción de audio a texto en español (\texttt{es-ES}). Requiere conexión a internet.
+    \item \textbf{PyAudio \& ALSA / PulseAudio:} Librerías y controladores a nivel de sistema operativo para capturar el flujo de audio desde el micrófono físico al entorno de Python.
+\end{itemize}
+
+\subsection{Visión Computacional e Inteligencia Artificial}
+\begin{itemize}
+    \item \textbf{Ultralytics (YOLOv8):} Modelo \texttt{yolov8n.pt} (versión Nano) pre-entrenado con el dataset COCO. Se configuró para filtrar únicamente clases de interés como \textit{bottle}, \textit{cell phone}, \textit{cup}, \textit{vase} y \textit{wine glass}.
+    \item \textbf{OpenCV (cv2):} Utilizado para el manejo de matrices de imágenes y visualización en pantalla (\texttt{cv2.imshow}).
+    \item \textbf{cv\_bridge:} Librería de ROS 2 esencial para convertir los mensajes de imagen nativos de ROS (\texttt{sensor\_msgs/Image}) a formato de matriz de OpenCV (BGR8) y viceversa.
+\end{itemize}
+
+\section{Conclusión}
+La integración de estas librerías permite tener un sistema modular y robusto. La separación en nodos permite que la detección visual, el reconocimiento de voz y la navegación operen de forma paralela sin bloquearse entre sí, resultando en una respuesta fluida tanto en entornos simulados como físicos.
+
+\end{document}
