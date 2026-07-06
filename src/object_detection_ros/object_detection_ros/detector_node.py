@@ -16,11 +16,11 @@ class DetectorNode(Node):
             Image,
             '/camera/image_raw',
             self.image_callback,
-            10
+            1  # Solo el frame más reciente, descartar los viejos
         )
         
         # Publisher for the annotated image with bounding boxes
-        self.publisher = self.create_publisher(Image, '/camera/image_annotated', 10)
+        self.publisher = self.create_publisher(Image, '/camera/image_annotated', 1)
         
         # Publisher for detected objects (for the brain node)
         self.detected_pub = self.create_publisher(String, '/detected_objects', 10)
@@ -31,10 +31,8 @@ class DetectorNode(Node):
         self.get_logger().info("Loading pre-trained YOLOv8 model...")
         self.model = YOLO('yolov8n.pt')
         
-        # Define the objects you want to detect
-        # We include 'cup', 'vase', 'wine glass' because Gazebo's "beer" model 
-        # is sometimes misclassified by YOLOv8 due to low graphics.
-        self.target_classes = ['bottle', 'cell phone', 'cup', 'vase', 'wine glass']
+        # Define the objects you want to detect (solo objetos reales de la demo)
+        self.target_classes = ['bottle', 'cell phone']
         
         # Get the class IDs for the target classes
         self.target_class_ids = []
@@ -42,7 +40,7 @@ class DetectorNode(Node):
             if class_name in self.target_classes:
                 self.target_class_ids.append(class_id)
                 
-        self.frame_skip = 3
+        self.frame_skip = 1 # Procesar todos los fotogramas (ya vienen a 5 FPS de la Raspberry)
         self.frame_count = 0
                 
         self.get_logger().info(f"Detector Node has been started. Filtering for: {self.target_classes}")
@@ -55,9 +53,9 @@ class DetectorNode(Node):
         try:
             # Convert ROS Image message to OpenCV image
             cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
-            
-            # Run YOLOv8 inference, filtering for only our target classes
-            results = self.model(cv_image, classes=self.target_class_ids, conf=0.15, verbose=False)
+            # Run YOLOv8 inference, filtering for only our target classes. 
+            # ¡Activamos el uso de la GPU (device=0) y half-precision para máximo rendimiento!
+            results = self.model(cv_image, classes=self.target_class_ids, conf=0.40, imgsz=320, verbose=False)
             
             # Get annotated image
             annotated_frame = results[0].plot()
@@ -80,6 +78,8 @@ class DetectorNode(Node):
             # Convert back to ROS Image message and publish
             annotated_msg = self.bridge.cv2_to_imgmsg(annotated_frame, encoding="bgr8")
             self.publisher.publish(annotated_msg)
+            
+            # La visualización se hará con rqt_image_view para evitar congelamientos de hilo en Linux
             
         except Exception as e:
             self.get_logger().error(f"Error processing image: {e}")

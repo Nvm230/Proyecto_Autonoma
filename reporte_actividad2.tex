@@ -1,0 +1,217 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[spanish]{babel}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{geometry}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{float}
+\geometry{a4paper, margin=2.5cm}
+
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    commentstyle=\color{gray},
+    stringstyle=\color{orange},
+    breaklines=true,
+    frame=single,
+    captionpos=b
+}
+
+\title{\textbf{Actividad 2: Implementaci\'on F\'isica del Robot Aut\'onomo}\\
+\large Soluci\'on al Problema de Transmisi\'on de Video en Tiempo Real\\mediante Streaming UDP Personalizado}
+\author{Proyecto Aut\'onoma}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Introducci\'on y Contexto del Problema}
+
+Durante la transici\'on de la implementaci\'on simulada (Gazebo) a la implementaci\'on f\'isica sobre el robot TurtleBot3, se identific\'o una limitaci\'on cr\'itica en la cadena de transmisi\'on de video que imposibilitaba la detecci\'on de objetos en tiempo real.
+
+El sistema original depend\'ia del paquete \texttt{usb\_cam} de ROS 2 para capturar la imagen de la c\'amara USB montada sobre la Raspberry Pi del TurtleBot3 y publicarla directamente al t\'opico \texttt{/camera/image\_raw}. Este enfoque, que funcionaba perfectamente en simulaci\'on, present\'o tres problemas simult\'aneos en el entorno f\'isico:
+
+\begin{enumerate}
+    \item \textbf{Corrupci\'on del driver UVC:} El m\'odulo del kernel Linux \texttt{uvcvideo} bloqueaba repetidamente el dispositivo \texttt{/dev/video0}, generando errores del tipo \texttt{Unable to start stream} incluso cuando la c\'amara era detectada correctamente por el sistema operativo.
+    \item \textbf{Limitaciones de ancho de banda:} El transporte nativo de im\'agenes de ROS 2 sobre la red Wi-Fi de \'area local resultaba en p\'erdida severa de paquetes UDP y fragmentaci\'on de mensajes. A resoluciones superiores a $160\times120$ p\'ixeles el flujo de video se interrump\'ia completamente, y a dicha resoluci\'on el modelo YOLOv8 no pod\'ia identificar objetos con precisi\'on aceptable.
+    \item \textbf{Conflicto de backends en OpenCV:} En la Raspberry Pi, OpenCV intentaba usar GStreamer como backend para captura de video (\texttt{cv2.VideoCapture(0)}), fallando silenciosamente al no tener un pipeline GStreamer v\'alido configurado, y generando el warning \texttt{GStreamer: pipeline have not been created}.
+\end{enumerate}
+
+\section{An\'alisis de la Causa Ra\'iz}
+
+El diagn\'ostico revel\'o que el problema principal no era de software de alto nivel, sino de la capa de transporte. ROS 2 utiliza DDS (\textit{Data Distribution Service}) como middleware de comunicaci\'on. DDS fragmenta internamente los mensajes que superan el MTU (\textit{Maximum Transmission Unit}) de la red. Un fotograma en formato crudo de $320\times240$ p\'ixeles en espacio de color RGB24 ocupa:
+
+\[
+320 \times 240 \times 3 \text{ bytes} = 230{,}400 \text{ bytes} \approx 225 \text{ KB por fotograma}
+\]
+
+Esta cantidad es aproximadamente 160 veces mayor que el MTU est\'andar de Ethernet (1,500 bytes). DDS debe fragmentar cada fotograma en $\sim$154 paquetes UDP. En una red Wi-Fi congestionada de laboratorio, la p\'erdida de \textbf{un solo fragmento} de los 154 provoca el descarte completo del fotograma por parte del receptor DDS, resultando en una tasa efectiva de recepci\'on cercana a cero.
+
+\section{Soluci\'on Implementada: Pipeline UDP Personalizado}
+
+Se dise\~n\'o e implement\'o una soluci\'on que reemplaza el mecanismo de transporte de ROS 2 para la c\'amara por un pipeline de comunicaci\'on UDP personalizado en Python. La arquitectura se compone de dos m\'odulos independientes:
+
+\subsection{Justificaci\'on del Protocolo: UDP frente a TCP}
+
+La elecci\'on del protocolo de transporte fue una decisi\'on de dise\~no cr\'itica. La tabla \ref{tab:protocolo} compara los dos candidatos:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lll}
+\toprule
+\textbf{Caracter\'istica} & \textbf{TCP} & \textbf{UDP} \\
+\midrule
+Establecimiento de conexi\'on & Three-way handshake (3 RTT) & Inmediato (0 RTT) \\
+Confirmaci\'on de entrega & S\'i (ACK por cada paquete) & No \\
+Retransmisi\'on en p\'erdida & S\'i (bloquea el emisor) & No \\
+Control de flujo & S\'i (ventana deslizante) & No \\
+Overhead por paquete & 20--60 bytes (cabecera TCP) & 8 bytes (cabecera UDP) \\
+Latencia para streaming & Alta (espera ACKs) & Baja \\
+\bottomrule
+\end{tabular}
+\caption{Comparativa TCP vs UDP para streaming de video en tiempo real}
+\label{tab:protocolo}
+\end{table}
+
+TCP fue descartado por dos razones fundamentales. Primero, el establecimiento de cada conexi\'on TCP requiere completar el \textbf{three-way handshake}: el cliente env\'ia un segmento \texttt{SYN}, el servidor responde con \texttt{SYN-ACK}, y el cliente confirma con \texttt{ACK}. Este proceso, aunque r\'apido en redes cableadas ($<1$ ms), introduce latencia adicional impredecible en redes Wi-Fi donde el retardo de ida y vuelta (RTT) puede superar los 20--50 ms.
+
+Segundo, y m\'as cr\'itico para video en tiempo real: cuando TCP detecta la p\'erdida de un paquete, \textbf{suspende la transmisi\'on de todos los paquetes posteriores} hasta recibir la confirmaci\'on de reenv\'io del paquete perdido (mecanismo \textit{head-of-line blocking}). En streaming de video, un fotograma perdido ya no tiene valor cuando llega con 100--500 ms de retraso, pues las dem\'as partes del sistema han procesado varios fotogramas m\'as recientes.
+
+UDP, al ser un protocolo \textbf{no orientado a conexi\'on y sin estado}, env\'ia cada datagrama de forma independiente e inmediata. Si un fotograma se pierde en tr\'ansito, el receptor simplemente descarta ese fotograma y procesa el siguiente, manteniendo la fluidez del stream. Esta filosof\'ia de ``frame reciente o nada'' es exactamente el comportamiento correcto para un sistema de detecci\'on visual en tiempo real como YOLOv8 sobre un robot m\'ovil.
+
+\subsection{M\'odulo Transmisor (\texttt{udp\_camera\_sender.py}) --- Raspberry Pi}
+
+Ejecutado directamente en la Raspberry Pi del TurtleBot3 (sin depender de ROS 2), este script realiza las siguientes operaciones en un bucle continuo:
+
+\begin{enumerate}
+    \item Captura un fotograma de \texttt{/dev/video0} usando OpenCV con el backend V4L2 expl\'icito (\texttt{cv2.CAP\_V4L2}) para evitar el conflicto con GStreamer.
+    \item Comprime el fotograma al formato JPEG con calidad configurable (80\%) mediante \texttt{cv2.imencode}. La compresi\'on JPEG reduce el tama\~no de un fotograma de $640\times480$ desde $\sim$900 KB en crudo hasta $\sim$15--30 KB, una reducci\'on de m\'as de 30:1.
+    \item Empaqueta los bytes JPEG con un encabezado de 4 bytes que indica el tama\~no total del payload (estructura big-endian).
+    \item Env\'ia el paquete completo mediante un \'unico datagrama UDP a la IP de la laptop.
+\end{enumerate}
+
+\begin{lstlisting}[caption={Codificaci\'on y env\'io UDP del fotograma}]
+encode_params = [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
+_, buffer = cv2.imencode('.jpg', frame, encode_params)
+jpg_bytes = buffer.tobytes()
+header = struct.pack('>I', len(jpg_bytes))
+sock.sendto(header + jpg_bytes, (LAPTOP_IP, PORT))
+\end{lstlisting}
+
+La clave del funcionamiento es la compresi\'on JPEG: al mantener cada datagrama por debajo de 65,507 bytes (l\'imite te\'orico de UDP), se evita la fragmentaci\'on a nivel IP y el mensaje llega \'integro con un \'unico datagrama.
+
+\subsection{M\'odulo Receptor (\texttt{udp\_camera\_receiver\_ros.py}) --- Laptop}
+
+Ejecutado en el entorno de ROS 2 de la laptop, este nodo act\'ua como un \textit{bridge} entre el socket UDP y el ecosistema de ROS 2:
+
+\begin{enumerate}
+    \item Abre un socket UDP y escucha en el puerto 5600.
+    \item Al recibir un datagrama, lee el encabezado de 4 bytes para validar la integridad del mensaje.
+    \item Decodifica los bytes JPEG de vuelta a una matriz NumPy mediante \texttt{cv2.imdecode}.
+    \item Convierte la matriz OpenCV al formato de mensaje de imagen de ROS 2 (\texttt{sensor\_msgs/Image}) mediante \texttt{cv\_bridge}.
+    \item Publica el mensaje en el t\'opico est\'andar \texttt{/camera/image\_raw}, haciendo completamente transparente el cambio de transporte para el \texttt{DetectorNode} (YOLO) y dem\'as consumidores.
+\end{enumerate}
+
+Para garantizar que el nodo de YOLO siempre procese el fotograma m\'as reciente sin acumular una cola de mensajes atrasados, la publicaci\'on al t\'opico se realiza desde un hilo separado con acceso mutuamente exclusivo (\texttt{threading.Lock}) al \'ultimo fotograma recibido.
+
+\subsection{Diagrama del Flujo de Datos}
+
+\begin{verbatim}
+[Camara USB /dev/video0]
+        | V4L2 + cv2.VideoCapture
+        v
+[Raspberry Pi: udp_camera_sender.py]
+        | Compresion JPEG 80%  (~20 KB/frame)
+        | UDP Socket puerto 5600  --  LAN
+        v
+[Laptop: udp_camera_receiver_ros.py]
+        | Decodificacion JPEG -> Matriz BGR
+        | cv_bridge
+        v
+[Topico ROS 2: /camera/image_raw]
+        |
+        +--> [DetectorNode: YOLOv8] --> /detected_objects --> [BrainNode]
+        |
+        +--> [rqt_image_view]  (visualizacion)
+\end{verbatim}
+
+\section{Resultados Obtenidos}
+
+La implementaci\'on del pipeline UDP personalizado result\'o en una mejora radical en todos los indicadores del sistema:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lll}
+\toprule
+\textbf{M\'etrica} & \textbf{Con usb\_cam (ROS DDS)} & \textbf{Con Pipeline UDP} \\
+\midrule
+Resoluci\'on m\'axima estable & $160\times120$ px & $640\times480$ px \\
+Framerate efectivo & $<1$ FPS & 15 FPS \\
+Estabilidad de conexi\'on & Desconexiones constantes & Estable durante toda la sesi\'on \\
+Detecci\'on de botella & No confiable & Funcional \\
+Latencia estimada & Variable (p\'erdidas DDS) & $<200$ ms \\
+\bottomrule
+\end{tabular}
+\caption{Comparativa de rendimiento antes y despu\'es de la soluci\'on}
+\end{table}
+
+El sistema logr\'o recibir y procesar fotogramas de forma continua a 15 FPS en resoluci\'on $640\times480$, verificado por el log del nodo receptor que reportaba 30 frames cada 2 segundos de forma consistente.
+
+\subsection{L\'imites de la Resoluci\'on: Restricciones de Hardware de la Raspberry Pi 4}
+
+Durante las pruebas se intent\'o elevar la resoluci\'on de transmisi\'on a $1280\times720$ a 60 FPS con el objetivo de mejorar la precisi\'on de YOLOv8. Este ajuste result\'o impracticable por las limitaciones computacionales de la Raspberry Pi 4 operando en condiciones de carga m\'ultiple.
+
+La Raspberry Pi 4 (4 GB RAM, CPU Cortex-A72 de 4 n\'ucleos a 1.8 GHz) ejecuta simult\'aneamente los siguientes procesos durante la operaci\'on del robot:
+
+\begin{itemize}
+    \item \textbf{Sistema operativo Ubuntu 22.04} y daemons del kernel.
+    \item \textbf{Stack de ROS 2 Humble} (\texttt{turtlebot3\_bringup}): nodo de motores Dynamixel, LIDAR, odometr\'ia.
+    \item \textbf{Nodo de c\'amara UDP} (\texttt{udp\_camera\_sender.py}): captura, codificaci\'on JPEG y transmisi\'on de red.
+    \item \textbf{Procesos de red Wi-Fi} para la interfaz \texttt{wlan1} dedicada a ROS 2.
+\end{itemize}
+
+La carga de codificar JPEG en tiempo real a $1280\times720$ píxeles por encima de 30 FPS satura los n\'ucleos de la CPU, ya que OpenCV en ARM no dispone de aceleraci\'on hardware JPEG a trav\'es de V4L2 en esta configuraci\'on. El resultado observado fue un colapso de la tasa de transmisi\'on: el script \texttt{udp\_camera\_sender.py} no lograba mantener el ritmo de captura, introduciendo latencia acumulada y caídas de frames. Adicionalmente, la contenci\'on de CPU provocaba que el nodo de motores perdiera sus ciclos de control Dynamixel, generando los errores \texttt{There is no status packet} incluso con bater\'ia cargada.
+
+La resoluci\'on de $640\times480$ a 15 FPS represent\'o el punto de equilibrio \'optimo: suficiente para que YOLOv8 identifique objetos como botellas y tel\'efonos con confianza superior al 40\%, y compatible con la carga de CPU de la Raspberry Pi 4 en operaci\'on completa del robot.
+
+\section{Dificultades Adicionales y Soluciones}
+
+\subsection{Desincronizaci\'on de Relojes entre Raspberry Pi y Laptop}
+
+Dado que el router de la red de laboratorio no cuenta con salida a internet, la Raspberry Pi no pudo sincronizar su reloj NTP tras ser reiniciada. Esto gener\'o una diferencia temporal de varios d\'ias entre la laptop y el robot, causando que Nav2 descartara todos los mensajes TF con el error:
+
+\begin{verbatim}
+Transform data too old: Data time: 1783377788s,
+                        Transform time: 1761086572s
+\end{verbatim}
+
+La soluci\'on fue sincronizar el reloj de la Raspberry Pi con el de la laptop mediante SSH:
+
+\begin{lstlisting}[language=bash, caption={Sincronizaci\'on del reloj v\'ia SSH}]
+ssh -t ubuntu@192.168.10.217 "sudo date -s \"$(date +'%Y-%m-%d %T')\""
+\end{lstlisting}
+
+\subsection{Bajo Voltaje de la Bater\'ia (Brown-out)}
+
+Durante las pruebas, la bater\'ia del TurtleBot3 descendi\'o por debajo de 11.1V, causando que la placa controladora OpenCR se desconectara del bus USB interno y generara un crash del proceso \texttt{turtlebot3\_node} con el error \texttt{There is no status packet}. Este problema es inherente al hardware y se mitiga cargando la bater\'ia por encima del 80\% antes de cada sesi\'on.
+
+\subsection{Exploraci\'on Aut\'onoma sin Navegaci\'on por Waypoints}
+
+Los waypoints de b\'usqueda estaban calibrados para el entorno de simulaci\'on (casa virtual de Gazebo) y no correspond\'ian a puntos v\'alidos del mapa del laboratorio. Como soluci\'on, se redise\~n\'o el \texttt{BrainNode} con un algoritmo de exploraci\'on aleatoria reactiva basado en el LIDAR. El robot avanza en l\'inea recta, detecta obst\'aculos a menos de 40 cm, y gira un \'angulo aleatorio entre 90° y 180° en direcci\'on aleatoria para continuar la exploraci\'on, eliminando la dependencia de coordenadas de mapa codificadas manualmente.
+
+\section{Conclusiones}
+
+La Actividad 2 demostr\'o que la implementaci\'on f\'isica de un sistema rob\'otico supone desaf\'ios fundamentalmente distintos a la simulaci\'on. Los tres hallazgos m\'as importantes son:
+
+\begin{enumerate}
+    \item \textbf{El middleware de ROS 2 (DDS) no es adecuado para streaming de video en redes Wi-Fi sin configuraci\'on expl\'icita del transporte de im\'agenes comprimidas.} El pipeline UDP personalizado result\'o ser una soluci\'on m\'as simple, confiable y de mayor rendimiento, demostrando que a veces la ingenier\'ia directa supera a las abstracciones del middleware.
+    \item \textbf{La sincronizaci\'on temporal es un requisito cr\'itico en sistemas distribuidos ROS 2.} La ausencia de NTP en redes aisladas debe anticiparse e incluirse en el procedimiento est\'andar de arranque del sistema f\'isico.
+    \item \textbf{Los algoritmos de exploraci\'on reactiva son m\'as robustos para entornos f\'isicos} que no coinciden exactamente con la geometr\'ia del mapa simulado. La dependencia en waypoints codificados a mano introduce una fragilidad significativa al cambiar de entorno.
+\end{enumerate}
+
+\end{document}

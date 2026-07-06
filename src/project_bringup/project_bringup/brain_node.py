@@ -1,190 +1,171 @@
 import rclpy
+import random
+import math
 from rclpy.node import Node
-from rclpy.action import ActionClient
 from std_msgs.msg import String
-from geometry_msgs.msg import Twist, PoseStamped, PoseWithCovarianceStamped
-from nav2_msgs.action import NavigateToPose
-import time
-import threading
+from geometry_msgs.msg import Twist
+from sensor_msgs.msg import LaserScan
+from rclpy.qos import qos_profile_sensor_data
 
 class BrainNode(Node):
     def __init__(self):
         super().__init__('brain_node')
-        
+
+        # Suscripciones
         self.cmd_sub = self.create_subscription(String, '/voice_commands', self.voice_cmd_callback, 10)
         self.det_sub = self.create_subscription(String, '/detected_objects', self.detected_callback, 10)
         
+        # EL SECRETO PARA EL ROBOT FÍSICO: El LIDAR físico publica en modo "SensorData" (Best Effort)
+        # Si usamos el default (Reliable), ROS 2 ignora los mensajes y el callback nunca se ejecuta.
+        self.scan_sub = self.create_subscription(LaserScan, '/scan', self.scan_callback, qos_profile_sensor_data)
+
+        # Publisher de velocidad
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
-        self.initial_pose_pub = self.create_publisher(PoseWithCovarianceStamped, '/initialpose', 10)
-        self.nav_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
-        
+
+        # Estado de búsqueda
         self.target_object = None
         self.searching = False
-        self.nav_goal_handle = None
-        
-        self.spin_timer = self.create_timer(0.2, self.spin_timer_callback)
-        self.spin_timer.cancel()
-        self.fallback_spinning = False
-        
-        self.search_waypoints = [
-            (0.5, 0.5),   # Center room
-            (3.5, 1.0),   # Right room (bottle)
-            (2.0, 3.0),   # Top room (cellphone)
-            (-2.0, 1.0)   # Spawn room
-        ]
-        self.current_waypoint_idx = 0
-        
-        self.waypoint_spin_timer = self.create_timer(15.0, self.done_spinning_callback)
-        self.waypoint_spin_timer.cancel()
-        
+        self.obstacle_ahead = False
+
+        # ---- Parámetros de exploración ----
+        self.LINEAR_SPEED  = 0.15   # m/s avanzando
+        self.ANGULAR_SPEED = 0.2    # rad/s girando
+        self.OBSTACLE_DIST = 0.50   # metros — gira y esquiva si hay algo a menos de 50cm
+
+        # ---- Máquina de estados simple ----
+        # Usamos un solo timer de control (10 Hz) y contamos el tiempo internamente.
+        # Estados: 'forward' | 'turning'
+        self.explore_state = 'idle'
+        self.turn_direction = 1.0   # +1 = izquierda, -1 = derecha (se elige aleatoriamente)
+        self.state_time = 0.0       # cuánto tiempo llevamos en el estado actual
+        self.state_target = 0.0     # cuánto tiempo debe durar el estado actual
+
+        # Timer único de control a 10 Hz
+        self.control_timer = self.create_timer(0.1, self.control_loop)
+        self.control_timer.cancel()
+
         self.get_logger().info('Brain Node started. Waiting for voice commands...')
 
+    # ------------------------------------------------------------------ #
+    #  LIDAR: detecta obstáculos en el arco frontal (±30°)               #
+    # ------------------------------------------------------------------ #
+    def scan_callback(self, msg):
+        if not self.searching:
+            return
+        n = len(msg.ranges)
+        front_indices = list(range(0, 30)) + list(range(n - 30, n))
+        # Filtramos inf, nan y distancias absurdamente pequeñas (ruido/reflejos internos)
+        front_ranges = [msg.ranges[i] for i in front_indices
+                        if not math.isnan(msg.ranges[i]) and not math.isinf(msg.ranges[i]) and msg.ranges[i] > 0.05]
+                        
+        valid_all = [r for r in msg.ranges if not math.isnan(r) and not math.isinf(r) and r > 0.05]
+        min_all = min(valid_all) if valid_all else -1.0
+        
+        # LOGS CRUDOS (Se imprimirán siempre que se llame la función para ver qué está pasando)
+        self.get_logger().info(f'[DEBUG LIDAR] N={n} | min_all={min_all:.2f} | front_valid_count={len(front_ranges)}')
+
+        if front_ranges:
+            min_dist = min(front_ranges)
+            self.obstacle_ahead = min_dist < self.OBSTACLE_DIST
+            if min_dist < 1.0:
+                self.get_logger().info(f'LIDAR min dist frontal: {min_dist:.2f} m')
+        else:
+            self.obstacle_ahead = False
+
+    # ------------------------------------------------------------------ #
+    #  LOOP ÚNICO DE CONTROL                                              #
+    # ------------------------------------------------------------------ #
+    def control_loop(self):
+        if not self.searching:
+            return
+
+        self.state_time += 0.1   # acumulamos 100 ms por iteración
+        twist = Twist()
+
+        if self.explore_state == 'forward':
+            if self.obstacle_ahead:
+                # Obstáculo detectado → girar
+                self.get_logger().info('Obstacle! Turning...')
+                self._begin_turn()
+            else:
+                # Seguir avanzando infinitamente hasta ver un obstáculo
+                twist.linear.x = self.LINEAR_SPEED
+
+        elif self.explore_state == 'turning':
+            if self.state_time >= self.state_target:
+                # Giro completado → volver a avanzar
+                self._begin_forward()
+            else:
+                twist.angular.z = self.ANGULAR_SPEED * self.turn_direction
+
+        self.cmd_vel_pub.publish(twist)
+
+    # ------------------------------------------------------------------ #
+    #  HELPERS: iniciar avance / iniciar giro                             #
+    # ------------------------------------------------------------------ #
+    def _begin_forward(self):
+        self.explore_state = 'forward'
+        self.state_time = 0.0
+        self.get_logger().info('Moving forward until obstacle detected...')
+
+    def _begin_turn(self):
+        self.explore_state = 'turning'
+        self.state_time = 0.0
+        # Gira entre 45° y 120° en lugar de 90°-180° para no quedarse dando la vuelta en U siempre
+        angle = random.uniform(math.pi / 4, 2 * math.pi / 3)   
+        self.state_target = angle / self.ANGULAR_SPEED  # duración en segundos
+        self.turn_direction = random.choice([-1.0, 1.0])
+        side = 'LEFT' if self.turn_direction > 0 else 'RIGHT'
+        self.get_logger().info(f'Turning {math.degrees(angle):.0f}° to the {side}')
+
+    # ------------------------------------------------------------------ #
+    #  COMANDOS DE VOZ                                                    #
+    # ------------------------------------------------------------------ #
     def voice_cmd_callback(self, msg):
         command = msg.data.lower()
         self.get_logger().info(f'Received voice command: {command}')
-        
-        if 'door' in command or 'puerta' in command:
-            self.get_logger().info('Test 1: Navigating to the door...')
-            self.navigate_to_door()
-            
-        elif 'bottle' in command or 'botella' in command:
-            self.get_logger().info('Test 2: Searching for bottle...')
+
+        if 'buscar botella' in command or 'search bottle' in command:
             self.start_search('bottle')
-            
-        elif 'cell' in command or 'celular' in command or 'phone' in command:
-            self.get_logger().info('Test 2: Searching for cell phone...')
+        elif 'buscar celular' in command or 'search cell phone' in command or 'search phone' in command:
             self.start_search('cell phone')
-            
         elif 'stop' in command or 'alto' in command:
-            self.stop_robot()
-            self.searching = False
-            self.fallback_spinning = False
-            self.spin_timer.cancel()
-            self.waypoint_spin_timer.cancel()
+            self.stop_search()
 
-    def navigate_to_door(self):
-        # Coordinates for the door in turtlebot3_house
-        door_pose = PoseStamped()
-        door_pose.header.frame_id = 'map'
-        door_pose.header.stamp = self.get_clock().now().to_msg()
-        door_pose.pose.position.x = 2.0
-        door_pose.pose.position.y = -2.5
-        door_pose.pose.orientation.w = 1.0
-        self.send_nav_goal(door_pose)
-
+    # ------------------------------------------------------------------ #
+    #  INICIO / FIN DE BÚSQUEDA                                           #
+    # ------------------------------------------------------------------ #
     def start_search(self, obj_name):
+        if self.searching:
+            self.stop_search()
+
         self.target_object = obj_name
         self.searching = True
-        self.current_waypoint_idx = 0
-        
-        self.get_logger().info('Starting exploration search...')
-        self.navigate_to_next_waypoint()
-        
-    def navigate_to_next_waypoint(self):
-        if self.current_waypoint_idx >= len(self.search_waypoints):
-            self.get_logger().info('Finished searching all waypoints. Object not found.')
-            self.searching = False
-            self.stop_robot()
-            return
-            
-        wx, wy = self.search_waypoints[self.current_waypoint_idx]
-        self.get_logger().info(f'Navigating to waypoint {self.current_waypoint_idx + 1}: ({wx}, {wy})')
-        
-        search_pose = PoseStamped()
-        search_pose.header.frame_id = 'map'
-        search_pose.header.stamp = self.get_clock().now().to_msg()
-        search_pose.pose.position.x = wx
-        search_pose.pose.position.y = wy
-        search_pose.pose.orientation.w = 1.0
-        
-        self.send_nav_goal(search_pose)
-        
-        # We will also start spinning when we reach there, or just spin if already there.
-        # For simplicity, if we are already searching, the detection callback will stop us.
+        self.obstacle_ahead = False
 
+        self.get_logger().info(f'=== SEARCHING FOR: {obj_name.upper()} ===')
+        self._begin_forward()
+        self.control_timer.reset()
+
+    def stop_search(self):
+        self.searching = False
+        self.explore_state = 'idle'
+        self.target_object = None
+        self.control_timer.cancel()
+        self.cmd_vel_pub.publish(Twist())   # parar ruedas
+        self.get_logger().info('Search stopped. Robot halted.')
+
+    # ------------------------------------------------------------------ #
+    #  DETECCIÓN DE OBJETO                                                #
+    # ------------------------------------------------------------------ #
     def detected_callback(self, msg):
         if not self.searching or not self.target_object:
             return
-            
         detected = msg.data.split(',')
-        # Map target to possible YOLOv8 detections (simulation objects might look different to AI)
-        acceptable_detections = [self.target_object]
-        if self.target_object == 'bottle':
-            acceptable_detections.extend(['cup', 'vase', 'wine glass'])
-            
-        if any(item in detected for item in acceptable_detections):
-            self.get_logger().info(f'*** TARGET FOUND: {self.target_object.upper()} ***')
-            self.searching = False
-            self.fallback_spinning = False
-            self.spin_timer.cancel()
-            self.waypoint_spin_timer.cancel()
-            self.target_object = None
-            self.stop_robot()
+        if self.target_object in detected:
+            self.get_logger().info(f'*** TARGET FOUND: {self.target_object.upper()} *** STOPPING!')
+            self.stop_search()
 
-    def stop_robot(self):
-        if self.nav_goal_handle:
-            self.get_logger().info('Canceling navigation goal...')
-            self.nav_goal_handle.cancel_goal_async()
-            
-        twist = Twist()
-        self.cmd_vel_pub.publish(twist)
-
-    def send_nav_goal(self, pose):
-        if not self.nav_client.wait_for_server(timeout_sec=2.0):
-            self.get_logger().error('NavigateToPose action server not available! Falling back to spinning in place for search.')
-            if self.searching:
-                self.fallback_spinning = True
-                self.spin_timer.reset()
-            return
-            
-        goal_msg = NavigateToPose.Goal()
-        goal_msg.pose = pose
-        
-        self.get_logger().info('Sending navigation goal...')
-        send_goal_future = self.nav_client.send_goal_async(goal_msg)
-        send_goal_future.add_done_callback(self.goal_response_callback)
-
-    def goal_response_callback(self, future):
-        goal_handle = future.result()
-        if not goal_handle.accepted:
-            self.get_logger().error('Navigation goal rejected')
-            return
-            
-        self.get_logger().info('Navigation goal accepted')
-        self.nav_goal_handle = goal_handle
-        
-        get_result_future = goal_handle.get_result_async()
-        get_result_future.add_done_callback(self.get_result_callback)
-
-    def get_result_callback(self, future):
-        status = future.result().status
-        self.nav_goal_handle = None
-        if status == 4: # SUCCEEDED
-            self.get_logger().info('Goal succeeded!')
-            if self.searching:
-                # If we reached the waypoint and haven't found it, spin around for 15 seconds
-                self.get_logger().info('Spinning to look around this waypoint...')
-                self.fallback_spinning = True
-                self.spin_timer.reset()
-                self.waypoint_spin_timer.reset()
-        else:
-            self.get_logger().info(f'Goal failed with status: {status}')
-
-    def spin_timer_callback(self):
-        if self.fallback_spinning:
-            twist = Twist()
-            twist.angular.z = 0.5
-            self.cmd_vel_pub.publish(twist)
-            
-    def done_spinning_callback(self):
-        if self.searching and self.fallback_spinning:
-            self.get_logger().info('Finished spinning at current waypoint. Moving to next.')
-            self.fallback_spinning = False
-            self.spin_timer.cancel()
-            self.waypoint_spin_timer.cancel()
-            
-            self.current_waypoint_idx += 1
-            self.navigate_to_next_waypoint()
 
 def main(args=None):
     rclpy.init(args=args)
