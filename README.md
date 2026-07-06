@@ -54,7 +54,7 @@ ros2 launch turtlebot3_bringup robot.launch.py
 
 # 2. Crear un mapa (SLAM)
 
-### Iniciar Gazebo
+### (Simulación) Iniciar Gazebo
 
 ```bash
 ros2 launch turtlebot3_gazebo turtlebot3_dqn_stage2.launch.py
@@ -91,7 +91,7 @@ map.pgm
 
 # 3. Navegación con un mapa existente
 
-### Iniciar Gazebo
+### (Simulación) Iniciar Gazebo
 
 ```bash
 ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py
