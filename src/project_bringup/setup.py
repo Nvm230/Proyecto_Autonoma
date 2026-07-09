@@ -12,7 +12,7 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*launch.[pxy][yma]*'))),
+        (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*.py'))),
         (os.path.join('share', package_name, 'urdf'), glob(os.path.join('urdf', '*.urdf'))),
         (os.path.join('share', package_name, 'worlds'), glob(os.path.join('worlds', '*.world'))),
         (os.path.join('share', package_name, 'maps'), glob(os.path.join('maps', '*'))),
@@ -27,7 +27,9 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'brain_node = project_bringup.brain_node:main'
+            'brain_node_clasico = project_bringup.brain_node_clasico:main',
+            'brain_node_nav2 = project_bringup.brain_node_nav2:main',
+            'reactive_explorer = project_bringup.reactive_explorer:main'
         ],
     },
 )

@@ -70,11 +70,11 @@ def generate_launch_description():
         }]
     )
     
-    # Brain Node (Behavior and Navigation logic)
+    # Brain Node (Clásico)
     brain_node = Node(
         package='project_bringup',
-        executable='brain_node',
-        name='brain_node',
+        executable='brain_node_clasico',
+        name='brain_node_clasico',
         output='screen',
         parameters=[{'use_sim_time': use_sim_time}]
     )
@@ -82,8 +82,10 @@ def generate_launch_description():
     ld = LaunchDescription()
     ld.add_action(declare_use_sim_time_cmd)
     ld.add_action(declare_device_index_cmd)
+    
     ld.add_action(nav2_cmd)
     ld.add_action(rviz_node)
+    
     ld.add_action(detector_node)
     ld.add_action(voice_node)
     ld.add_action(brain_node)

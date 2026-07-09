@@ -31,8 +31,9 @@ class DetectorNode(Node):
         self.get_logger().info("Loading pre-trained YOLOv8 model...")
         self.model = YOLO('yolov8n.pt')
         
-        # Define the objects you want to detect (solo objetos reales de la demo)
-        self.target_classes = ['bottle', 'cell phone']
+        # Define the objects you want to detect (solo
+        # Las clases se dejaron así para que YOLO pueda reconocer la lata de Coca Cola de simulación 
+        self.target_classes = ['bottle', 'cell phone', 'cup', 'vase', 'wine glass']
         
         # Get the class IDs for the target classes
         self.target_class_ids = []
